@@ -61,7 +61,7 @@ struct CameraUniforms {
     var tanHalfFov: Float
     var aspect: Float
     var moving: Int32
-    var _pad4: Int32 = 0
+    var stepCount: Int32
 }
 
 /// Accretion disk parameters (binding 2).

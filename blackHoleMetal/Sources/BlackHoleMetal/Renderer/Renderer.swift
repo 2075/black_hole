@@ -24,10 +24,31 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var gridIndexBuffer: MTLBuffer?
     private var gridIndexCount: Int = 0
 
-    // MARK: - Textures
+    /// Fixed grid resolution (matches black_hole.cpp gridSize = 25).
+    private let gridSize: Int = 25
 
-    /// Compute shader writes geodesic ray-traced image into this texture.
-    private var computeTexture: MTLTexture?
+    /// Set on first frame; grid only regenerates when gravity moves objects.
+    private var needsGridUpdate: Bool = true
+
+    // MARK: - Textures (Double-Buffered)
+
+    /// Two compute textures for double-buffering: one is displayed while the
+    /// other receives the next geodesic compute result.
+    private var computeTextures: [MTLTexture?] = [nil, nil]
+
+    /// Index into `computeTextures` for the texture currently shown by the
+    /// render pass.
+    private var displayTextureIndex: Int = 0
+
+    /// `true` while a compute command buffer is in-flight on the GPU.
+    /// Prevents piling up redundant compute work.
+    private var computeInFlight: Bool = false
+
+    // MARK: - Dirty Flag
+
+    /// When `false`, the previous `computeTexture` is reused and the expensive
+    /// geodesic compute dispatch is skipped entirely.
+    private var needsComputeUpdate: Bool = true
 
     // MARK: - Scene
 
@@ -56,6 +77,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         switch chars {
         case "g":
             gravitySim.isEnabled.toggle()
+            needsComputeUpdate = true
             print("[INFO] Gravity turned \(gravitySim.isEnabled ? "ON" : "OFF")")
 
         case "c":
@@ -99,6 +121,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             1.0
         )
 
+        needsComputeUpdate = true
         print("[INFO] Color palette randomized – disk: (\(diskBaseColor.x), \(diskBaseColor.y), \(diskBaseColor.z))")
     }
 
@@ -129,6 +152,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard clamped != resolutionLevel else { return }
         resolutionLevel = clamped
         allocateComputeTexture()
+        needsComputeUpdate = true
         print("[INFO] Resolution level \(resolutionLevel): \(computeWidth)×\(computeHeight)")
     }
 
@@ -154,6 +178,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                                 depthFormat: view.depthStencilPixelFormat)
         buildDepthStencilState()
         buildQuadVertexBuffer()
+        buildGridBuffers()
         allocateComputeTexture()
     }
 
@@ -271,6 +296,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
+    /// Allocate fixed-size grid buffers once. Index topology is constant and
+    /// written here; vertex positions are updated by `updateGridVertices()`.
+    private func buildGridBuffers() {
+        let vertexCount = (gridSize + 1) * (gridSize + 1)
+        gridVertexBuffer = device.makeBuffer(
+            length: vertexCount * MemoryLayout<SIMD3<Float>>.stride,
+            options: .storageModeShared
+        )
+
+        var indices: [UInt32] = []
+        indices.reserveCapacity(gridSize * gridSize * 4)
+        for z in 0..<gridSize {
+            for x in 0..<gridSize {
+                let i = UInt32(z * (gridSize + 1) + x)
+                indices.append(contentsOf: [i, i + 1])
+                indices.append(contentsOf: [i, i + UInt32(gridSize + 1)])
+            }
+        }
+        gridIndexBuffer = device.makeBuffer(
+            bytes: indices,
+            length: indices.count * MemoryLayout<UInt32>.size,
+            options: .storageModeShared
+        )
+        gridIndexCount = indices.count
+    }
+
     private func allocateComputeTexture() {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
@@ -280,20 +331,23 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
         desc.usage = [.shaderRead, .shaderWrite]
         desc.storageMode = .private
-        computeTexture = device.makeTexture(descriptor: desc)
+        computeTextures[0] = device.makeTexture(descriptor: desc)
+        computeTextures[1] = device.makeTexture(descriptor: desc)
+        displayTextureIndex = 0
+        computeInFlight = false
     }
 
     // MARK: - Grid Generation (CPU)
 
-    /// Rebuild the spacetime curvature grid mesh on the CPU.
-    /// Matches Engine::generateGrid() from black_hole.cpp.
-    private func generateGrid() {
-        let gridSize = 25
+    /// Update grid vertex positions in-place. Index topology is constant and
+    /// written once by `buildGridBuffers()`.
+    private func updateGridVertices() {
+        guard let buffer = gridVertexBuffer else { return }
         let spacing: Float = 1e10
+        let vertexCount = (gridSize + 1) * (gridSize + 1)
+        let ptr = buffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
 
-        var vertices: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-
+        var idx = 0
         for z in 0...gridSize {
             for x in 0...gridSize {
                 let worldX = Float(x - gridSize / 2) * spacing
@@ -315,36 +369,24 @@ final class Renderer: NSObject, MTKViewDelegate {
                     }
                 }
 
-                vertices.append(SIMD3<Float>(worldX, y, worldZ))
+                ptr[idx] = SIMD3<Float>(worldX, y, worldZ)
+                idx += 1
             }
         }
-
-        for z in 0..<gridSize {
-            for x in 0..<gridSize {
-                let i = UInt32(z * (gridSize + 1) + x)
-                indices.append(contentsOf: [i, i + 1])
-                indices.append(contentsOf: [i, i + UInt32(gridSize + 1)])
-            }
-        }
-
-        gridVertexBuffer = device.makeBuffer(
-            bytes: vertices,
-            length: vertices.count * MemoryLayout<SIMD3<Float>>.stride,
-            options: .storageModeShared
-        )
-        gridIndexBuffer = device.makeBuffer(
-            bytes: indices,
-            length: indices.count * MemoryLayout<UInt32>.size,
-            options: .storageModeShared
-        )
-        gridIndexCount = indices.count
     }
 
     // MARK: - Uniform Uploads
 
+    /// Adaptive step count: low during interaction for snappy preview, full when static.
+    private static let interactionStepCount: Int32 = 5_000
+    private static let fullStepCount: Int32 = Int32(kDefaultStepCount)
+
     private func makeCameraUniforms() -> CameraUniforms {
         let aspect = Float(viewportSize.x) / Float(viewportSize.y)
-        return camera.uniforms(aspect: aspect)
+        let steps = (camera.isMoving || camera.isDragging)
+            ? Self.interactionStepCount
+            : Self.fullStepCount
+        return camera.uniforms(aspect: aspect, stepCount: steps)
     }
 
     private func makeDiskUniforms() -> DiskUniforms {
@@ -384,29 +426,48 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         viewportSize = SIMD2(UInt32(size.width), UInt32(size.height))
+        needsComputeUpdate = true
     }
 
     func draw(in view: MTKView) {
         // 1) N-body gravity update
+        let gravityActive = gravitySim.isEnabled
         gravitySim.step(objects: &sceneObjects, dt: 1.0 / 60.0)
 
-        // 2) Regenerate spacetime curvature grid
-        generateGrid()
+        // 2) Determine whether the compute shader needs to run this frame
+        if camera.hasChanged {
+            needsComputeUpdate = true
+            camera.clearChanged()
+        }
+        if gravityActive {
+            needsComputeUpdate = true
+        }
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        // 3) Regenerate spacetime curvature grid (skip if objects haven't moved)
+        if needsGridUpdate || gravityActive {
+            updateGridVertices()
+            needsGridUpdate = false
+        }
 
-        // 3) Dispatch geodesic compute shader
-        dispatchCompute(commandBuffer: commandBuffer)
+        // 4) Dispatch geodesic compute into the back texture (double-buffered).
+        //    If a previous compute is still in-flight, skip and retry next frame.
+        if needsComputeUpdate && !computeInFlight {
+            dispatchCompute()
+            needsComputeUpdate = false
+        }
 
-        // 4) Render pass: fullscreen quad + grid overlay
+        // 5) Render pass (separate command buffer): fullscreen quad + grid overlay
+        guard let renderBuffer = commandQueue.makeCommandBuffer() else { return }
+        renderBuffer.label = "Render"
+
         guard let drawable = view.currentDrawable,
               let renderPassDescriptor = view.currentRenderPassDescriptor else {
-            commandBuffer.commit()
+            renderBuffer.commit()
             return
         }
 
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            commandBuffer.commit()
+        guard let renderEncoder = renderBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            renderBuffer.commit()
             return
         }
 
@@ -414,16 +475,40 @@ final class Renderer: NSObject, MTKViewDelegate {
         drawGrid(encoder: renderEncoder)
 
         renderEncoder.endEncoding()
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
+        renderBuffer.present(drawable)
+        renderBuffer.commit()
+
+        // Clear transient movement flag so scroll/keyboard impulses don't
+        // stick.  Continuous drag re-sets it every event before the next frame.
+        // If movement just ended, schedule one more compute at full step count.
+        if camera.isMoving {
+            needsComputeUpdate = true
+            camera.clearMoving()
+        }
+
+        // Pause the render loop when the scene is fully static to drop GPU
+        // usage to zero.  InputMTKView unpauses on any user input.
+        if !needsComputeUpdate && !computeInFlight && !gravityActive && !camera.isDragging {
+            view.isPaused = true
+        }
     }
 
     // MARK: - Compute Dispatch
 
-    private func dispatchCompute(commandBuffer: MTLCommandBuffer) {
+    private func dispatchCompute() {
+        let writeIndex = 1 - displayTextureIndex
+
         guard let pipeline = computePipeline,
-              let texture = computeTexture,
-              let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+              let texture = computeTextures[writeIndex],
+              let computeBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        computeInFlight = true
+        computeBuffer.label = "Geodesic Compute"
+
+        guard let encoder = computeBuffer.makeComputeCommandEncoder() else {
+            computeInFlight = false
+            return
+        }
 
         encoder.setComputePipelineState(pipeline)
         encoder.setTexture(texture, index: 0)
@@ -449,6 +534,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
 
         encoder.endEncoding()
+
+        // Flip the display texture to the freshly-computed one once the GPU
+        // finishes.  Dispatched to main so draw(in:) never races with the swap.
+        computeBuffer.addCompletedHandler { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.displayTextureIndex = writeIndex
+                self.computeInFlight = false
+            }
+        }
+
+        computeBuffer.commit()
     }
 
     // MARK: - Render Passes
@@ -456,7 +553,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func drawFullscreenQuad(encoder: MTLRenderCommandEncoder) {
         guard let pipeline = quadRenderPipeline,
               let vertexBuffer = quadVertexBuffer,
-              let texture = computeTexture else { return }
+              let texture = computeTextures[displayTextureIndex] else { return }
 
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)

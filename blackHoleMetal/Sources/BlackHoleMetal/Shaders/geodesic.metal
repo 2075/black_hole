@@ -11,7 +11,7 @@ struct CameraUniforms {
     float tanHalfFov;
     float aspect;
     int   moving;
-    int   _pad4;
+    int   stepCount;
 };
 
 struct DiskUniforms {
@@ -161,7 +161,7 @@ kernel void geodesicKernel(
     HitInfo hitInfo;
     hitInfo.hit = false;
 
-    int steps = 60000;
+    int steps = cam.stepCount;
 
     for (int i = 0; i < steps; ++i) {
         if (interceptBlackHole(ray, SagA_rs)) { hitBlackHole = true; break; }

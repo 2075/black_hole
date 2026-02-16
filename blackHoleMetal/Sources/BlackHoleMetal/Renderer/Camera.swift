@@ -38,6 +38,19 @@ final class Camera {
     private(set) var isMoving: Bool = false
     private var lastMouseLocation: CGPoint = .zero
 
+    // MARK: - Dirty Tracking
+
+    /// Set `true` by every camera mutation; cleared by the renderer after it dispatches compute.
+    private(set) var hasChanged: Bool = true
+
+    /// Reset the dirty flag after the renderer has consumed it.
+    func clearChanged() { hasChanged = false }
+
+    /// Reset the transient movement flag. Called each frame so impulse-based
+    /// inputs (scroll, keyboard) don't stick. Continuous input (mouse drag)
+    /// re-sets it every event before the next frame.
+    func clearMoving() { isMoving = false }
+
     // MARK: - Derived Properties
 
     /// Camera world-space position computed from spherical coordinates.
@@ -83,7 +96,7 @@ final class Camera {
     // MARK: - Uniform Upload
 
     /// Build the camera uniform struct ready for GPU upload.
-    func uniforms(aspect: Float) -> CameraUniforms {
+    func uniforms(aspect: Float, stepCount: Int32) -> CameraUniforms {
         CameraUniforms(
             position: position,
             _pad0: 0,
@@ -96,7 +109,7 @@ final class Camera {
             tanHalfFov: tanHalfFov,
             aspect: aspect,
             moving: isDragging ? 1 : 0,
-            _pad4: 0
+            stepCount: stepCount
         )
     }
 
@@ -105,6 +118,7 @@ final class Camera {
     func mouseDown(with event: NSEvent, in view: NSView) {
         isDragging = true
         isMoving = true
+        hasChanged = true
         lastMouseLocation = event.locationInWindow
     }
 
@@ -129,12 +143,14 @@ final class Camera {
 
         lastMouseLocation = location
         isMoving = true
+        hasChanged = true
     }
 
     func scrollWheel(with event: NSEvent) {
         radius -= Float(event.scrollingDeltaY * zoomSpeed)
         radius = simd_clamp(radius, minRadius, maxRadius)
         isMoving = true
+        hasChanged = true
     }
 
     // MARK: - Keyboard Orbit
@@ -145,11 +161,13 @@ final class Camera {
     func nudgeAzimuth(by delta: Float) {
         azimuth += delta
         isMoving = true
+        hasChanged = true
     }
 
     func nudgeElevation(by delta: Float) {
         elevation += delta
         elevation = simd_clamp(elevation, 0.01, .pi - 0.01)
         isMoving = true
+        hasChanged = true
     }
 }

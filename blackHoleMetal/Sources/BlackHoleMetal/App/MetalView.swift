@@ -75,6 +75,7 @@ class InputMTKView: MTKView {
             }
             guard event.window === self.window else { return event }
             print("[MONITOR] captured keyDown code=\(event.keyCode)")
+            self.isPaused = false
             self.renderer?.handleKeyDown(with: event)
             return nil   // consume the event (prevents system beep)
         }
@@ -87,6 +88,7 @@ class InputMTKView: MTKView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        isPaused = false
         window?.makeFirstResponder(self)
         renderer?.camera.mouseDown(with: event, in: self)
     }
@@ -96,10 +98,12 @@ class InputMTKView: MTKView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        isPaused = false
         renderer?.camera.mouseDragged(with: event, in: self)
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        isPaused = false
         renderer?.gravitySim.isEnabled = true
     }
 
@@ -108,11 +112,12 @@ class InputMTKView: MTKView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        isPaused = false
         renderer?.camera.scrollWheel(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
-        // Fallback in case the monitor is not installed yet
+        isPaused = false
         renderer?.handleKeyDown(with: event)
     }
 }
