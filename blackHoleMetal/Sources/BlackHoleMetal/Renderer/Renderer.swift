@@ -50,6 +50,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// geodesic compute dispatch is skipped entirely.
     private var needsComputeUpdate: Bool = true
 
+    // MARK: - FPS
+
+    private let fpsCounter: FPSCounter
+
     // MARK: - Scene
 
     let camera = Camera()
@@ -79,6 +83,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             gravitySim.isEnabled.toggle()
             needsComputeUpdate = true
             print("[INFO] Gravity turned \(gravitySim.isEnabled ? "ON" : "OFF")")
+
+        case "r":
+            guard !event.isARepeat else { return }
+            camera.autoRotate.toggle()
+            print("[INFO] Auto-rotate turned \(camera.autoRotate ? "ON" : "OFF")")
 
         case "c":
             guard !event.isARepeat else { return }
@@ -162,8 +171,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: - Initialization
 
-    init(device: MTLDevice, view: MTKView) {
+    init(device: MTLDevice, view: MTKView, fpsCounter: FPSCounter) {
         self.device = device
+        self.fpsCounter = fpsCounter
         guard let queue = device.makeCommandQueue() else {
             fatalError("Failed to create Metal command queue")
         }
@@ -430,6 +440,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        fpsCounter.tick()
+        
+        // 0) Update camera (for auto-rotation)
+        camera.update()
+
         // 1) N-body gravity update
         let gravityActive = gravitySim.isEnabled
         gravitySim.step(objects: &sceneObjects, dt: 1.0 / 60.0)

@@ -38,6 +38,14 @@ final class Camera {
     private(set) var isMoving: Bool = false
     private var lastMouseLocation: CGPoint = .zero
 
+    // MARK: - Auto-Rotation
+    
+    /// When true, the camera automatically rotates around the azimuth axis.
+    var autoRotate: Bool = false
+    
+    /// Auto-rotation speed (radians per frame).
+    var autoRotateSpeed: Float = 0.005
+    
     // MARK: - Dirty Tracking
 
     /// Set `true` by every camera mutation; cleared by the renderer after it dispatches compute.
@@ -50,6 +58,14 @@ final class Camera {
     /// inputs (scroll, keyboard) don't stick. Continuous input (mouse drag)
     /// re-sets it every event before the next frame.
     func clearMoving() { isMoving = false }
+    
+    /// Update camera state for auto-rotation. Call once per frame.
+    func update() {
+        if autoRotate {
+            azimuth += autoRotateSpeed
+            hasChanged = true
+        }
+    }
 
     // MARK: - Derived Properties
 

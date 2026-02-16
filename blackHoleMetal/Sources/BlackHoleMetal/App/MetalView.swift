@@ -6,6 +6,8 @@ import MetalKit
 /// SwiftUI wrapper around InputMTKView for hosting the Metal renderer with input support.
 struct MetalView: NSViewRepresentable {
 
+    var fpsCounter: FPSCounter
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -23,7 +25,7 @@ struct MetalView: NSViewRepresentable {
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
 
-        let renderer = Renderer(device: device, view: mtkView)
+        let renderer = Renderer(device: device, view: mtkView, fpsCounter: fpsCounter)
         context.coordinator.renderer = renderer
         mtkView.delegate = renderer
         mtkView.renderer = renderer
@@ -50,6 +52,10 @@ class InputMTKView: MTKView {
 
     weak var renderer: Renderer?
     private var keyMonitor: Any?
+    
+    /// Saved gravity state before right-click, so we can restore it on release.
+    /// This ensures right-click acts as a temporary "boost" without interfering with 'G' key toggle.
+    private var gravityStateBeforeRightClick: Bool = false
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -104,11 +110,14 @@ class InputMTKView: MTKView {
 
     override func rightMouseDown(with event: NSEvent) {
         isPaused = false
+        // Save current state and enable gravity as a temporary boost
+        gravityStateBeforeRightClick = renderer?.gravitySim.isEnabled ?? false
         renderer?.gravitySim.isEnabled = true
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        renderer?.gravitySim.isEnabled = false
+        // Restore the saved state (respects 'G' key toggle)
+        renderer?.gravitySim.isEnabled = gravityStateBeforeRightClick
     }
 
     override func scrollWheel(with event: NSEvent) {
