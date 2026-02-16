@@ -113,21 +113,9 @@ final class Camera {
         isMoving = true
     }
 
-    func rightMouseDown(with event: NSEvent) {
-        // TODO: Toggle gravity (matches GLFW right-click behavior)
-    }
-
-    func rightMouseUp(with event: NSEvent) {
-        // TODO: Toggle gravity off
-    }
-
     func scrollWheel(with event: NSEvent) {
         radius -= Float(event.scrollingDeltaY * zoomSpeed)
         radius = simd_clamp(radius, minRadius, maxRadius)
         isMoving = true
-    }
-
-    func keyDown(with event: NSEvent) {
-        // TODO: Handle 'G' key to toggle gravity (matches C++ processKey)
     }
 }

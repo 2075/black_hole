@@ -145,3 +145,24 @@ _deps
 
 # Vcpkg
 vcpkg_installed
+
+##### Swift / SPM
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+##### Metal
+*.air
+*.metallib
+*.dia
+
+##### Rust
+target/
+
+##### Cursor
+.specstory/
+.cursorindexingignore

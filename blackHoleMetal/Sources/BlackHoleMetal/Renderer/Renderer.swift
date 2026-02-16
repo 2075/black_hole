@@ -1,5 +1,6 @@
 import MetalKit
 import simd
+import AppKit
 
 /// Main Metal renderer -- owns the compute and render pipelines, camera, and scene state.
 /// Replaces the C++ Engine struct from black_hole.cpp.
@@ -33,6 +34,16 @@ final class Renderer: NSObject, MTKViewDelegate {
     let camera = Camera()
     let gravitySim = GravitySim()
     var sceneObjects: [SceneObject] = makeDefaultSceneObjects()
+
+    // MARK: - Input
+
+    /// Handle key events forwarded from InputMTKView.
+    func handleKeyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == "g" {
+            gravitySim.isEnabled.toggle()
+            print("[INFO] Gravity turned \(gravitySim.isEnabled ? "ON" : "OFF")")
+        }
+    }
 
     // MARK: - Resolution
 
@@ -77,22 +88,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Load all .metal sources from the app bundle resources and compile them.
         // The shader files are copied into the bundle by Package.swift resource rules.
         let shaderNames = ["geodesic", "grid", "quad"]
-        var combinedSource = ""
+        var combinedSource = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 
         for name in shaderNames {
             guard let url = Bundle.module.url(forResource: name, withExtension: "metal") else {
                 print("[Warning] Missing shader resource: \(name).metal")
                 continue
             }
-            if let source = try? String(contentsOf: url, encoding: .utf8) {
-                combinedSource += "\n// --- \(name).metal ---\n" + source + "\n"
+            guard var source = try? String(contentsOf: url, encoding: .utf8) else {
+                print("[Warning] Failed to read shader: \(name).metal")
+                continue
             }
+
+            // Strip duplicate #include and using directives since we add them once at the top
+            source = source.replacingOccurrences(of: "#include <metal_stdlib>", with: "")
+            source = source.replacingOccurrences(of: "using namespace metal;", with: "")
+
+            combinedSource += "// --- \(name).metal ---\n" + source + "\n"
         }
 
-        // TODO: Compile combined source into a MTLLibrary at runtime.
-        // For now, try loading the default library (works when built via Xcode).
         do {
             shaderLibrary = try device.makeLibrary(source: combinedSource, options: nil)
+            print("[Info] Metal shaders compiled successfully")
         } catch {
             print("[Error] Failed to compile Metal shaders: \(error)")
             shaderLibrary = device.makeDefaultLibrary()
