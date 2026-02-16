@@ -19,6 +19,7 @@ struct DiskUniforms {
     float disk_r2;
     float disk_num;
     float thickness;
+    float4 diskColor;
 };
 
 struct ObjectsUniforms {
@@ -141,8 +142,8 @@ kernel void geodesicKernel(
     constant ObjectsUniforms &objs           [[buffer(2)]],
     uint2 gid                                [[thread_position_in_grid]]
 ) {
-    int WIDTH  = 200;
-    int HEIGHT = 150;
+    int WIDTH  = outImage.get_width();
+    int HEIGHT = outImage.get_height();
 
     if (int(gid.x) >= WIDTH || int(gid.y) >= HEIGHT) return;
 
@@ -178,9 +179,11 @@ kernel void geodesicKernel(
     }
 
     if (hitDisk) {
-        float r = length(float3(ray.x, ray.y, ray.z)) / disk.disk_r2;
-        float3 diskColor = float3(1.0, r, 0.2);
-        color = float4(diskColor, r);
+        float r_frac = clamp(length(float3(ray.x, ray.y, ray.z)) / disk.disk_r2, 0.0, 1.0);
+        float3 innerCol = disk.diskColor.rgb * 0.3;
+        float3 outerCol = disk.diskColor.rgb;
+        float3 diskCol = mix(innerCol, outerCol, r_frac);
+        color = float4(diskCol, clamp(r_frac, 0.1, 1.0));
 
     } else if (hitBlackHole) {
         color = float4(0.0, 0.0, 0.0, 1.0);

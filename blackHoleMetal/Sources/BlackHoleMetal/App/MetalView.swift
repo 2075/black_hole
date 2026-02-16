@@ -28,11 +28,6 @@ struct MetalView: NSViewRepresentable {
         mtkView.delegate = renderer
         mtkView.renderer = renderer
 
-        // Make the view the first responder so it receives keyboard events
-        DispatchQueue.main.async {
-            mtkView.window?.makeFirstResponder(mtkView)
-        }
-
         return mtkView
     }
 
@@ -54,10 +49,45 @@ struct MetalView: NSViewRepresentable {
 class InputMTKView: MTKView {
 
     weak var renderer: Renderer?
+    private var keyMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // When launched via `swift run` from an embedded terminal (Cursor/VSCode),
+        // the process isn't registered as a GUI app. This makes macOS treat it as
+        // a regular app so it can receive keyboard events when focused.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeFirstResponder(self)
+        installKeyMonitor()
+    }
+
+    /// SwiftUI's NSHostingView intercepts keyDown before it reaches embedded NSViews.
+    /// A local event monitor catches key events at the NSApplication level, bypassing that.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else {
+                print("[MONITOR] self is nil, passing event through")
+                return event
+            }
+            guard event.window === self.window else { return event }
+            print("[MONITOR] captured keyDown code=\(event.keyCode)")
+            self.renderer?.handleKeyDown(with: event)
+            return nil   // consume the event (prevents system beep)
+        }
+    }
+
+    deinit {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         renderer?.camera.mouseDown(with: event, in: self)
     }
 
@@ -82,6 +112,7 @@ class InputMTKView: MTKView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Fallback in case the monitor is not installed yet
         renderer?.handleKeyDown(with: event)
     }
 }

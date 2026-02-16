@@ -39,10 +39,72 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Handle key events forwarded from InputMTKView.
     func handleKeyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == "g" {
+        let chars = event.charactersIgnoringModifiers ?? "<none>"
+        print("[KEY] code=\(event.keyCode) chars=\"\(chars)\" repeat=\(event.isARepeat)")
+
+        // Arrow keys (use keyCode since arrows have no printable character)
+        switch event.keyCode {
+        case 126: camera.nudgeElevation(by: -camera.arrowStep); return  // up arrow
+        case 125: camera.nudgeElevation(by:  camera.arrowStep); return  // down arrow
+        case 123: camera.nudgeAzimuth(by: -camera.arrowStep);   return  // left arrow
+        case 124: camera.nudgeAzimuth(by:  camera.arrowStep);   return  // right arrow
+        default: break
+        }
+
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return }
+
+        switch chars {
+        case "g":
             gravitySim.isEnabled.toggle()
             print("[INFO] Gravity turned \(gravitySim.isEnabled ? "ON" : "OFF")")
+
+        case "c":
+            guard !event.isARepeat else { return }
+            randomizeColorPalette()
+
+        case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            guard !event.isARepeat else { return }
+            setResolutionLevel(Int(chars)!)
+
+        default:
+            break
         }
+    }
+
+    // MARK: - Color Palette
+
+    /// Base color for the accretion disk (randomized by 'c' key)
+    private var diskBaseColor: SIMD4<Float> = SIMD4<Float>(1.0, 0.7, 0.2, 1.0)
+
+    /// Randomize colors for scene objects and the accretion disk.
+    private func randomizeColorPalette() {
+        for i in 0..<sceneObjects.count {
+            // Skip the black hole (black object)
+            let c = sceneObjects[i].color
+            if c.x == 0 && c.y == 0 && c.z == 0 { continue }
+
+            sceneObjects[i].color = SIMD4<Float>(
+                hsbComponent(Float.random(in: 0...1)),
+                hsbComponent(Float.random(in: 0...1)),
+                hsbComponent(Float.random(in: 0...1)),
+                1.0
+            )
+        }
+
+        // Randomize disk color (warm-biased for a natural thermal look)
+        diskBaseColor = SIMD4<Float>(
+            Float.random(in: 0.5...1.0),
+            Float.random(in: 0.2...1.0),
+            Float.random(in: 0.1...0.8),
+            1.0
+        )
+
+        print("[INFO] Color palette randomized – disk: (\(diskBaseColor.x), \(diskBaseColor.y), \(diskBaseColor.z))")
+    }
+
+    /// Produce a vivid color channel value from a uniform random input.
+    private func hsbComponent(_ t: Float) -> Float {
+        return 0.3 + t * 0.7  // range [0.3, 1.0] avoids too-dark components
     }
 
     // MARK: - Resolution
@@ -50,9 +112,25 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Window resolution
     private var viewportSize: SIMD2<UInt32> = SIMD2(800, 600)
 
-    /// Compute shader resolution (lower than viewport for interactive speed)
-    private let computeWidth: Int = 200
-    private let computeHeight: Int = 150
+    /// Base unit for compute resolution
+    private let baseComputeWidth: Int = 100
+    private let baseComputeHeight: Int = 75
+
+    /// Current resolution multiplier (1–9)
+    private var resolutionLevel: Int = 2
+
+    /// Compute shader resolution (derived from resolutionLevel)
+    private var computeWidth: Int { baseComputeWidth * resolutionLevel }
+    private var computeHeight: Int { baseComputeHeight * resolutionLevel }
+
+    /// Change the compute resolution level and reallocate the texture.
+    private func setResolutionLevel(_ level: Int) {
+        let clamped = max(1, min(9, level))
+        guard clamped != resolutionLevel else { return }
+        resolutionLevel = clamped
+        allocateComputeTexture()
+        print("[INFO] Resolution level \(resolutionLevel): \(computeWidth)×\(computeHeight)")
+    }
 
     // MARK: - Depth Stencil
 
@@ -275,7 +353,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             innerRadius: rs * kDiskInnerFactor,
             outerRadius: rs * kDiskOuterFactor,
             diskNum: 2.0,
-            thickness: kDiskThickness
+            thickness: kDiskThickness,
+            diskColor: diskBaseColor
         )
     }
 

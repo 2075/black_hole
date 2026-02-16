@@ -70,6 +70,7 @@ struct DiskUniforms {
     var outerRadius: Float
     var diskNum: Float
     var thickness: Float
+    var diskColor: SIMD4<Float>
 }
 
 /// Per-object data for sphere intersection in the compute shader (binding 3).

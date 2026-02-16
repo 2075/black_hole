@@ -24,6 +24,9 @@ final class Camera {
     /// Vertical angle (radians, 0 = north pole, pi = south pole)
     var elevation: Float = .pi / 2.0
 
+    /// Roll angle around the forward axis (radians), controlled by alt+drag
+    var roll: Float = 0.0
+
     // MARK: - Sensitivity
 
     var orbitSpeed: Float = 0.01
@@ -52,14 +55,24 @@ final class Camera {
         normalize(target - position)
     }
 
-    /// Right direction (perpendicular to forward and world-up).
-    var right: SIMD3<Float> {
+    /// Base right direction before roll (perpendicular to forward and world-up).
+    private var baseRight: SIMD3<Float> {
         normalize(cross(forward, SIMD3<Float>(0, 1, 0)))
     }
 
-    /// Recomputed up (orthogonal to forward and right).
+    /// Base up direction before roll (orthogonal to forward and baseRight).
+    private var baseUp: SIMD3<Float> {
+        cross(baseRight, forward)
+    }
+
+    /// Right direction with roll applied.
+    var right: SIMD3<Float> {
+        baseRight * cos(roll) + baseUp * sin(roll)
+    }
+
+    /// Up direction with roll applied.
     var up: SIMD3<Float> {
-        cross(right, forward)
+        -baseRight * sin(roll) + baseUp * cos(roll)
     }
 
     /// Half-angle tangent of the vertical field of view (60 deg).
@@ -105,9 +118,14 @@ final class Camera {
         let dx = Float(location.x - lastMouseLocation.x)
         let dy = Float(location.y - lastMouseLocation.y)
 
-        azimuth += dx * orbitSpeed
-        elevation -= dy * orbitSpeed
-        elevation = simd_clamp(elevation, 0.01, .pi - 0.01)
+        if event.modifierFlags.contains(.option) {
+            // Alt+drag: rotate around view axis (roll)
+            roll += dx * orbitSpeed
+        } else {
+            azimuth += dx * orbitSpeed
+            elevation -= dy * orbitSpeed
+            elevation = simd_clamp(elevation, 0.01, .pi - 0.01)
+        }
 
         lastMouseLocation = location
         isMoving = true
@@ -116,6 +134,22 @@ final class Camera {
     func scrollWheel(with event: NSEvent) {
         radius -= Float(event.scrollingDeltaY * zoomSpeed)
         radius = simd_clamp(radius, minRadius, maxRadius)
+        isMoving = true
+    }
+
+    // MARK: - Keyboard Orbit
+
+    /// Step size for arrow-key orbiting (radians per keypress)
+    let arrowStep: Float = 0.05
+
+    func nudgeAzimuth(by delta: Float) {
+        azimuth += delta
+        isMoving = true
+    }
+
+    func nudgeElevation(by delta: Float) {
+        elevation += delta
+        elevation = simd_clamp(elevation, 0.01, .pi - 0.01)
         isMoving = true
     }
 }
